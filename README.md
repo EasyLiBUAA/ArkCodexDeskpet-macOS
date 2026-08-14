@@ -2,8 +2,7 @@
 
 A native macOS menu-bar desktop pet for Codex. It plays transparent Arknights
 animation frames, follows the current Codex session status, supports a pet
-library, drag locking, scaling, mini mode, fullscreen hiding, and optional
-login launch.
+library, drag locking, scaling, and mini mode.
 
 ## Requirements
 
@@ -29,7 +28,6 @@ ask for confirmation the first time it is opened.
 - Unlock drag from the pet menu before moving it.
 - Right-click the pet or use the menu-bar icon for actions and settings.
 - The status ribbon reads `~/.codex/sessions/` only; it never writes Codex data.
-- In Settings, enable “Launch at login” to create a user LaunchAgent.
 
 Add another pet by creating `Sources/ArkCodexDeskpet/pets/<name>/manifest.json` and state frame folders
 that follow the included sample manifest. The original project's PRTS exporter

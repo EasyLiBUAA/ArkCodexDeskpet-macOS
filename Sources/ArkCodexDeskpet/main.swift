@@ -183,7 +183,11 @@ final class PetPanel: NSPanel {
         let point = NSEvent.mouseLocation
         let delta = NSPoint(x: point.x - (frame.origin.x + mouse.x), y: point.y - (frame.origin.y + mouse.y))
         setFrameOrigin(NSPoint(x: origin.x + delta.x, y: origin.y + delta.y)); isDragging = true
-        if manifest.states["move"] != nil { setState("move") }
+        if manifest.states["move"] != nil && state != "move" {
+            state = "move"
+            frame = 0
+            showFrame()
+        }
     }
     override func mouseUp(with event: NSEvent) { if isDragging { setState("idle"); savePosition() } else { setState("interact") } }
     override func rightMouseDown(with event: NSEvent) { AppDelegate.shared?.openMenu(for: self, event: event) }
