@@ -17,7 +17,6 @@ struct PetSettings: Codable {
     var speed = 1.0
     var miniMode = false
     var locked = true
-    var autoHideFullscreen = false
     var positionX: CGFloat?
     var positionY: CGFloat?
 }
@@ -172,7 +171,6 @@ final class PetPanel: NSPanel {
     func toggleLocked() { settings.locked.toggle(); store.save(settings) }
     func toggleMini() { settings.miniMode.toggle(); store.save(settings); applyAppearance() }
     func scale(by delta: Double) { settings.scale = min(2.0, max(0.3, settings.scale + delta)); store.save(settings); applyAppearance() }
-    func toggleFullscreenHiding() { settings.autoHideFullscreen.toggle(); store.save(settings) }
     func savePosition() { settings.positionX = frame.origin.x; settings.positionY = frame.origin.y; store.save(settings) }
     func availablePets() -> [String] { (try? FileManager.default.contentsOfDirectory(atPath: petsDirectory()!.path))?.filter { FileManager.default.fileExists(atPath: petsDirectory()!.appendingPathComponent($0).appendingPathComponent("manifest.json").path) }.sorted() ?? [] }
     func selectPet(_ name: String) { savePosition(); loadPet(named: name); store.save(settings); applyAppearance(); startTimers() }
@@ -219,7 +217,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for name in pet.availablePets() { let item = NSMenuItem(title: name, action: #selector(selectPet(_:)), keyEquivalent: ""); item.representedObject = name; item.target = self; item.state = name == pet.settings.pet ? .on : .off; pets.addItem(item) }
         let library = NSMenuItem(title: "Pet Library", action: nil, keyEquivalent: ""); library.submenu = pets; menu.addItem(library)
         menu.addItem(.separator())
-        add(menu, pet.settings.autoHideFullscreen ? "Disable Fullscreen Hiding" : "Hide During Fullscreen", #selector(toggleFullscreen))
         add(menu, "Quit Ark Codex Deskpet", #selector(quit))
         return menu
     }
@@ -229,7 +226,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleMini() { pet.toggleMini() }
     @objc private func larger() { pet.scale(by: 0.1) }
     @objc private func smaller() { pet.scale(by: -0.1) }
-    @objc private func toggleFullscreen() { pet.toggleFullscreenHiding() }
     @objc private func selectState(_ sender: NSMenuItem) { if let state = sender.representedObject as? String { pet.setState(state) } }
     @objc private func selectPet(_ sender: NSMenuItem) { if let name = sender.representedObject as? String { pet.selectPet(name) } }
     @objc private func quit() { NSApp.terminate(nil) }
