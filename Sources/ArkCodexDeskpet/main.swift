@@ -70,7 +70,7 @@ final class PetPanel: NSPanel {
     var manifest: Manifest!
     private var framesURL: URL!
     private var state = "idle"
-    private var frame = 0
+    private var frameIndex = 0
     private var timer: Timer?
     private var statusTimer: Timer?
     private var imageView = NSImageView()
@@ -133,7 +133,7 @@ final class PetPanel: NSPanel {
         framesURL = petURL.appendingPathComponent("frames")
         settings.pet = name
         state = manifest.states["idle"] == nil ? manifest.states.keys.sorted().first! : "idle"
-        frame = 0
+        frameIndex = 0
     }
 
     private func applyAppearance() {
@@ -155,18 +155,18 @@ final class PetPanel: NSPanel {
         refreshStatus()
     }
 
-    private func frameURL() -> URL { framesURL.appendingPathComponent(state).appendingPathComponent(String(format: "frame_%04d.png", frame)) }
+    private func frameURL() -> URL { framesURL.appendingPathComponent(state).appendingPathComponent(String(format: "frame_%04d.png", frameIndex)) }
     private func showFrame() { imageView.image = NSImage(contentsOf: frameURL()) }
     private func nextFrame() {
         guard let info = manifest.states[state] else { return }
-        frame = (frame + 1) % info.count
+        frameIndex = (frameIndex + 1) % info.count
         showFrame()
     }
     private func refreshStatus() { statusLabel.stringValue = monitor.status() }
 
     func setState(_ next: String) {
         guard manifest.states[next] != nil else { return }
-        state = next; frame = 0; applyAppearance()
+        state = next; frameIndex = 0; applyAppearance()
     }
     func toggleLocked() { settings.locked.toggle(); store.save(settings) }
     func toggleMini() { settings.miniMode.toggle(); store.save(settings); applyAppearance() }
@@ -183,7 +183,7 @@ final class PetPanel: NSPanel {
         setFrameOrigin(NSPoint(x: origin.x + delta.x, y: origin.y + delta.y)); isDragging = true
         if manifest.states["move"] != nil && state != "move" {
             state = "move"
-            frame = 0
+            frameIndex = 0
             showFrame()
         }
     }
