@@ -16,10 +16,11 @@ struct PetSettings: Codable {
     var scale = 0.55
     var speed = 1.0
     var miniMode = false
-    var locked = true
+    var locked = false
     var positionX: CGFloat?
     var positionY: CGFloat?
     var scaleMigrationVersion: Int?
+    var dragMigrationVersion: Int?
 }
 
 final class SettingsStore {
@@ -139,6 +140,30 @@ final class PetStatusLabel: NSTextField {
     }
 }
 
+final class PetContentView: NSView {
+    var resizeHandle: NSView?
+    var onMouseDown: (() -> Void)?
+    var onMouseDragged: (() -> Void)?
+    var onMouseUp: (() -> Void)?
+    var onRightMouseDown: ((NSEvent) -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if let resizeHandle, resizeHandle.frame.contains(point) {
+            return resizeHandle.hitTest(convert(point, to: resizeHandle))
+        }
+        return bounds.contains(point) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) { onMouseDown?() }
+    override func mouseDragged(with event: NSEvent) { onMouseDragged?() }
+    override func mouseUp(with event: NSEvent) { onMouseUp?() }
+    override func rightMouseDown(with event: NSEvent) { onRightMouseDown?(event) }
+}
+
+func draggedWindowOrigin(from origin: NSPoint, mouseStart: NSPoint, mouseNow: NSPoint) -> NSPoint {
+    NSPoint(x: origin.x + mouseNow.x - mouseStart.x, y: origin.y + mouseNow.y - mouseStart.y)
+}
+
 final class PetPanel: NSPanel {
     private let store = SettingsStore()
     private let monitor = CodexMonitor()
@@ -152,7 +177,7 @@ final class PetPanel: NSPanel {
     private var imageView = PetImageView()
     private var statusLabel = PetStatusLabel()
     private var dragOrigin: NSPoint?
-    private var mouseOrigin: NSPoint?
+    private var dragStartMouse: NSPoint?
     private var isDragging = false
     private let resizeHandle = ResizeHandleView()
     private var resizeStartScale = 0.55
@@ -166,8 +191,13 @@ final class PetPanel: NSPanel {
             settings.scale = min(settings.scale, 0.55)
             settings.scaleMigrationVersion = 1
         }
+        let needsDragMigration = settings.dragMigrationVersion == nil
+        if needsDragMigration {
+            settings.locked = false
+            settings.dragMigrationVersion = 1
+        }
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        if needsScaleMigration { store.save(settings) }
+        if needsScaleMigration || needsDragMigration { store.save(settings) }
         isFloatingPanel = true
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -183,7 +213,7 @@ final class PetPanel: NSPanel {
     }
 
     private func setupViews() {
-        let view = NSView()
+        let view = PetContentView()
         view.wantsLayer = true
         contentView = view
         imageView.imageScaling = .scaleProportionallyUpOrDown
@@ -204,6 +234,14 @@ final class PetPanel: NSPanel {
         resizeHandle.onChange = { [weak self] in self?.continueResize() }
         resizeHandle.onEnd = { [weak self] in self?.endResize() }
         view.addSubview(resizeHandle)
+        view.resizeHandle = resizeHandle
+        view.onMouseDown = { [weak self] in self?.beginDrag() }
+        view.onMouseDragged = { [weak self] in self?.continueDrag() }
+        view.onMouseUp = { [weak self] in self?.endDrag() }
+        view.onRightMouseDown = { [weak self] event in
+            guard let self else { return }
+            AppDelegate.shared?.openMenu(for: self, event: event)
+        }
         NSLayoutConstraint.activate([
             imageView.leadingAnchor.constraint(equalTo: view.leadingAnchor), imageView.trailingAnchor.constraint(equalTo: view.trailingAnchor), imageView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 4), statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4), statusLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 3), statusLabel.heightAnchor.constraint(equalToConstant: 28),
@@ -311,26 +349,42 @@ final class PetPanel: NSPanel {
     func availablePets() -> [String] { PetLibrary.shared.names() }
     func selectPet(_ name: String) { savePosition(); loadPet(named: name); store.save(settings); applyAppearance(); startTimers() }
 
-    override func mouseDown(with event: NSEvent) { mouseOrigin = event.locationInWindow; dragOrigin = frame.origin; isDragging = false }
-    override func mouseDragged(with event: NSEvent) {
-        guard !settings.locked, let origin = dragOrigin, let mouse = mouseOrigin else { return }
+    private func beginDrag() {
+        dragOrigin = frame.origin
+        dragStartMouse = NSEvent.mouseLocation
+        isDragging = false
+    }
+
+    private func continueDrag() {
+        guard !settings.locked, let origin = dragOrigin, let startMouse = dragStartMouse else { return }
         let point = NSEvent.mouseLocation
-        let delta = NSPoint(x: point.x - (frame.origin.x + mouse.x), y: point.y - (frame.origin.y + mouse.y))
-        setFrameOrigin(NSPoint(x: origin.x + delta.x, y: origin.y + delta.y)); isDragging = true
+        let delta = NSPoint(x: point.x - startMouse.x, y: point.y - startMouse.y)
+        setFrameOrigin(draggedWindowOrigin(from: origin, mouseStart: startMouse, mouseNow: point))
+        isDragging = abs(delta.x) > 2 || abs(delta.y) > 2
         if manifest.states["move"] != nil && state != "move" {
             state = "move"
             frameIndex = 0
             showFrame()
         }
     }
-    override func mouseUp(with event: NSEvent) { if isDragging { setState("idle"); savePosition() } else { setState("interact") } }
-    override func rightMouseDown(with event: NSEvent) { AppDelegate.shared?.openMenu(for: self, event: event) }
+
+    private func endDrag() {
+        if isDragging {
+            savePosition()
+            setState("idle")
+        } else {
+            setState("interact")
+        }
+        dragOrigin = nil
+        dragStartMouse = nil
+    }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static weak var shared: AppDelegate?
     private var pet: PetPanel!
     private var statusItem: NSStatusItem!
+    private var activePRTSImporter: PRTSFrameImporter?
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
         pet = PetPanel()
@@ -342,29 +396,156 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func openMenu(for panel: PetPanel, event: NSEvent) { let menu = makeMenu(); NSMenu.popUpContextMenu(menu, with: event, for: panel.contentView!) }
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, "Show Pet", #selector(showPet))
-        add(menu, pet.settings.locked ? "Unlock Drag" : "Lock Drag", #selector(toggleLock))
-        add(menu, pet.settings.miniMode ? "Show Status" : "Hide Status", #selector(toggleMini))
-        add(menu, "Larger", #selector(larger)); add(menu, "Smaller", #selector(smaller))
-        let states = NSMenu(title: "Animation")
-        for state in ["idle", "interact", "move", "sit", "sleep"] where pet.manifest.states[state] != nil { let item = NSMenuItem(title: state.capitalized, action: #selector(selectState(_:)), keyEquivalent: ""); item.representedObject = state; item.target = self; states.addItem(item) }
-        let animationItem = NSMenuItem(title: "Animation", action: nil, keyEquivalent: ""); animationItem.submenu = states; menu.addItem(animationItem)
-        let pets = NSMenu(title: "Pet Library")
+        add(menu, "显示桌宠", #selector(showPet))
+        add(menu, pet.settings.locked ? "解锁移动" : "锁定位置", #selector(toggleLock))
+        add(menu, pet.settings.miniMode ? "显示状态" : "隐藏状态", #selector(toggleMini))
+        add(menu, "放大", #selector(larger)); add(menu, "缩小", #selector(smaller))
+        let stateNames = ["idle": "待机", "interact": "互动", "move": "移动", "sit": "坐下", "sleep": "睡眠"]
+        let states = NSMenu(title: "动画")
+        for state in ["idle", "interact", "move", "sit", "sleep"] where pet.manifest.states[state] != nil { let item = NSMenuItem(title: stateNames[state] ?? state, action: #selector(selectState(_:)), keyEquivalent: ""); item.representedObject = state; item.target = self; states.addItem(item) }
+        let animationItem = NSMenuItem(title: "动画", action: nil, keyEquivalent: ""); animationItem.submenu = states; menu.addItem(animationItem)
+        let pets = NSMenu(title: "桌宠库")
         for name in pet.availablePets() { let item = NSMenuItem(title: name, action: #selector(selectPet(_:)), keyEquivalent: ""); item.representedObject = name; item.target = self; item.state = name == pet.settings.pet ? .on : .off; pets.addItem(item) }
-        let library = NSMenuItem(title: "Pet Library", action: nil, keyEquivalent: ""); library.submenu = pets; menu.addItem(library)
-        add(menu, "添加桌宠…", #selector(addPet))
+        let library = NSMenuItem(title: "桌宠库", action: nil, keyEquivalent: ""); library.submenu = pets; menu.addItem(library)
+        add(menu, "从 PRTS 联网添加…", #selector(addPRTSPet))
+        add(menu, "从本地文件夹导入…", #selector(addPet))
         menu.addItem(.separator())
-        add(menu, "Quit Ark Codex Deskpet", #selector(quit))
+        add(menu, "退出 Ark Codex Deskpet", #selector(quit))
         return menu
     }
     private func add(_ menu: NSMenu, _ title: String, _ selector: Selector) { let item = NSMenuItem(title: title, action: selector, keyEquivalent: ""); item.target = self; menu.addItem(item) }
     @objc private func showPet() { pet.orderFrontRegardless() }
-    @objc private func toggleLock() { pet.toggleLocked() }
-    @objc private func toggleMini() { pet.toggleMini() }
+    @objc private func toggleLock() { pet.toggleLocked(); statusItem.menu = makeMenu() }
+    @objc private func toggleMini() { pet.toggleMini(); statusItem.menu = makeMenu() }
     @objc private func larger() { pet.scale(by: 0.1) }
     @objc private func smaller() { pet.scale(by: -0.1) }
     @objc private func selectState(_ sender: NSMenuItem) { if let state = sender.representedObject as? String { pet.setState(state) } }
     @objc private func selectPet(_ sender: NSMenuItem) { if let name = sender.representedObject as? String { pet.selectPet(name) } }
+    @objc private func addPRTSPet() {
+        Task { @MainActor [weak self] in
+            await self?.runPRTSImport()
+        }
+    }
+
+    @MainActor
+    private func runPRTSImport() async {
+        guard let query = promptForPRTSQuery() else { return }
+        let progress = PRTSProgressWindow()
+        do {
+            progress.show("正在搜索 PRTS 干员…")
+            let results = try await PRTSService.shared.search(query)
+            progress.close()
+            guard let selected = choosePRTSResult(results) else { return }
+
+            progress.show("正在读取“\(selected.title)”的模型信息…")
+            async let pageRequest = PRTSService.shared.modelPage(for: selected.title)
+            let page = try await pageRequest
+            let metadata = try await PRTSService.shared.metadata(for: page.modelID)
+            progress.close()
+            guard let skin = choosePRTSSkin(metadata.buildSkins) else { return }
+
+            progress.show("正在载入“\(selected.title)”的“\(skin)”基建模型…")
+            let importer = PRTSFrameImporter()
+            activePRTSImporter = importer
+            importer.onProgress = { [weak progress] text in progress?.update(text) }
+            let candidate = try await importer.generate(
+                operatorName: selected.title,
+                modelPage: page,
+                metadata: metadata,
+                skinName: skin
+            )
+            activePRTSImporter = nil
+            defer { try? FileManager.default.removeItem(at: candidate.url.deletingLastPathComponent()) }
+
+            progress.update("正在写入本地桌宠库…")
+            guard installCandidate(candidate) else {
+                progress.close()
+                return
+            }
+            pet.selectPet(candidate.name)
+            statusItem.menu = makeMenu()
+            progress.close()
+            showMessage(title: "PRTS 桌宠已添加", text: "已下载、生成并切换到“\(candidate.name)”。")
+        } catch {
+            activePRTSImporter = nil
+            progress.close()
+            showMessage(title: "PRTS 导入失败", text: error.localizedDescription)
+        }
+    }
+
+    private func promptForPRTSQuery() -> String? {
+        let field = NSSearchField(frame: NSRect(x: 0, y: 0, width: 360, height: 28))
+        field.placeholderString = "输入干员名称，例如：浊心斯卡蒂"
+        let alert = NSAlert()
+        alert.messageText = "从 PRTS 搜索干员"
+        alert.informativeText = "将从 PRTS Wiki 下载所选干员的基建模型，仅用于个人学习与桌宠展示。"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "搜索")
+        alert.addButton(withTitle: "取消")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let query = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            showMessage(title: "请输入干员名称", text: "名称不能为空。")
+            return nil
+        }
+        return query
+    }
+
+    private func choosePRTSResult(_ results: [PRTSSearchResult]) -> PRTSSearchResult? {
+        let popUp = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
+        popUp.addItems(withTitles: results.map(\.title))
+        let alert = NSAlert()
+        alert.messageText = "选择 PRTS 干员"
+        alert.informativeText = "请选择要生成桌宠的干员页面。"
+        alert.accessoryView = popUp
+        alert.addButton(withTitle: "下一步")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn,
+              popUp.indexOfSelectedItem >= 0,
+              popUp.indexOfSelectedItem < results.count else { return nil }
+        return results[popUp.indexOfSelectedItem]
+    }
+
+    private func choosePRTSSkin(_ skins: [String]) -> String? {
+        let popUp = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
+        popUp.addItems(withTitles: skins)
+        let alert = NSAlert()
+        alert.messageText = "选择时装"
+        alert.informativeText = "只显示包含基建模型的时装。"
+        alert.accessoryView = popUp
+        alert.addButton(withTitle: "下载并添加")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn,
+              popUp.indexOfSelectedItem >= 0,
+              popUp.indexOfSelectedItem < skins.count else { return nil }
+        return skins[popUp.indexOfSelectedItem]
+    }
+
+    private func installCandidate(_ candidate: PetPackageCandidate) -> Bool {
+        do {
+            try PetLibrary.shared.install(candidate)
+            return true
+        } catch PetImportError.alreadyExists {
+            let confirmation = NSAlert()
+            confirmation.messageText = "替换已有桌宠？"
+            confirmation.informativeText = "“\(candidate.name)”已经存在。替换会更新本地素材。"
+            confirmation.addButton(withTitle: "替换")
+            confirmation.addButton(withTitle: "取消")
+            guard confirmation.runModal() == .alertFirstButtonReturn else { return false }
+            do {
+                try PetLibrary.shared.install(candidate, replacing: true)
+                return true
+            } catch {
+                showMessage(title: "导入失败", text: error.localizedDescription)
+                return false
+            }
+        } catch {
+            showMessage(title: "导入失败", text: error.localizedDescription)
+            return false
+        }
+    }
+
     @objc private func addPet() {
         let panel = NSOpenPanel()
         panel.title = "选择桌宠包来源"
@@ -382,25 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let picker = PetSearchController(candidates: candidates)
         guard let candidate = picker.runModal() else { return }
-        do {
-            try PetLibrary.shared.install(candidate)
-        } catch PetImportError.alreadyExists {
-            let confirmation = NSAlert()
-            confirmation.messageText = "替换已有桌宠？"
-            confirmation.informativeText = "“\(candidate.name)”已经导入。替换会更新它的素材。"
-            confirmation.addButton(withTitle: "替换")
-            confirmation.addButton(withTitle: "取消")
-            guard confirmation.runModal() == .alertFirstButtonReturn else { return }
-            do {
-                try PetLibrary.shared.install(candidate, replacing: true)
-            } catch {
-                showMessage(title: "导入失败", text: error.localizedDescription)
-                return
-            }
-        } catch {
-            showMessage(title: "导入失败", text: error.localizedDescription)
-            return
-        }
+        guard installCandidate(candidate) else { return }
         pet.selectPet(candidate.name)
         statusItem.menu = makeMenu()
         showMessage(title: "桌宠已添加", text: "已导入并切换到“\(candidate.name)”。")

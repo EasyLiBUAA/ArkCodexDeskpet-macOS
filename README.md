@@ -26,10 +26,12 @@ ask for confirmation the first time it is opened.
 
 - Click the pet for its interaction animation.
 - Drag the handle in the pet's lower-right corner to resize it smoothly.
-- Unlock drag from the pet menu before moving it.
+- Drag anywhere else on the pet to move it. Choose `锁定位置` when you do not
+  want it to move accidentally.
 - Right-click the pet or use the menu-bar icon for actions and settings.
-- Choose `添加桌宠…`, select a pet-package folder (or a parent folder), then
-  search the compatible packages discovered there and add one.
+- Choose `从 PRTS 联网添加…`, search for an operator, select a result and skin,
+  and wait while the app downloads and generates local animation frames.
+- Choose `从本地文件夹导入…` to import an existing compatible pet package.
 - The status ribbon reads `~/.codex/sessions/` only; it never writes Codex data.
 
 An importable package is a folder containing `manifest.json` and
@@ -37,6 +39,10 @@ An importable package is a folder containing `manifest.json` and
 `~/Library/Application Support/ArkCodexDeskpet/pets`, so app upgrades do not
 remove them. The original project's PRTS exporter and WebM processor can
 produce this layout.
+
+Online import connects only to the public PRTS Wiki API and asset hosts. The
+generated operator frames are stored locally and are not included in this
+repository.
 
 ## Attribution
 

@@ -9,6 +9,10 @@ let package = Package(
         .executableTarget(
             name: "ArkCodexDeskpet",
             resources: [.copy("pets")]
+        ),
+        .testTarget(
+            name: "ArkCodexDeskpetTests",
+            dependencies: ["ArkCodexDeskpet"]
         )
     ]
 )

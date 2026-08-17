@@ -1,0 +1,31 @@
+import AppKit
+import XCTest
+@testable import ArkCodexDeskpet
+
+final class ArkCodexDeskpetTests: XCTestCase {
+    func testNewSettingsAllowDragging() {
+        XCTAssertFalse(PetSettings().locked)
+    }
+
+    func testDraggedOriginUsesOriginalWindowPosition() {
+        let result = draggedWindowOrigin(
+            from: NSPoint(x: 120, y: 80),
+            mouseStart: NSPoint(x: 300, y: 200),
+            mouseNow: NSPoint(x: 345, y: 165)
+        )
+        XCTAssertEqual(result, NSPoint(x: 165, y: 45))
+    }
+
+    func testPRTSMetadataListsOnlyBuildModelsWithDefaultFirst() {
+        let metadata = PRTSMetadata(
+            prefix: "https://example.invalid/",
+            name: "test",
+            skin: [
+                "时装": ["基建": PRTSModel(file: "skin", skin: nil)],
+                "默认": ["基建": PRTSModel(file: "default", skin: nil)],
+                "战斗模型": ["战斗": PRTSModel(file: "battle", skin: nil)]
+            ]
+        )
+        XCTAssertEqual(metadata.buildSkins, ["默认", "时装"])
+    }
+}
