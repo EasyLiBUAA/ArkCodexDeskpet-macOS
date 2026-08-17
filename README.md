@@ -2,7 +2,7 @@
 
 A native macOS menu-bar desktop pet for Codex. It plays transparent Arknights
 animation frames, follows the current Codex session status, supports a pet
-library, drag locking, scaling, and mini mode.
+library, smooth drag resizing, drag locking, and mini mode.
 
 ## Requirements
 
@@ -25,13 +25,18 @@ ask for confirmation the first time it is opened.
 ## Use
 
 - Click the pet for its interaction animation.
+- Drag the handle in the pet's lower-right corner to resize it smoothly.
 - Unlock drag from the pet menu before moving it.
 - Right-click the pet or use the menu-bar icon for actions and settings.
+- Choose `添加桌宠…`, select a pet-package folder (or a parent folder), then
+  search the compatible packages discovered there and add one.
 - The status ribbon reads `~/.codex/sessions/` only; it never writes Codex data.
 
-Add another pet by creating `Sources/ArkCodexDeskpet/pets/<name>/manifest.json` and state frame folders
-that follow the included sample manifest. The original project's PRTS exporter
-and WebM processor can produce this layout.
+An importable package is a folder containing `manifest.json` and
+`frames/<state>/frame_XXXX.png`. Imported pets are validated and copied to
+`~/Library/Application Support/ArkCodexDeskpet/pets`, so app upgrades do not
+remove them. The original project's PRTS exporter and WebM processor can
+produce this layout.
 
 ## Attribution
 
