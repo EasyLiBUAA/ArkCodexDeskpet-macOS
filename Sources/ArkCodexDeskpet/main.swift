@@ -13,12 +13,13 @@ struct Manifest: Decodable {
 
 struct PetSettings: Codable {
     var pet = "予愿安洁莉娜"
-    var scale = 1.0
+    var scale = 0.55
     var speed = 1.0
     var miniMode = false
     var locked = true
     var positionX: CGFloat?
     var positionY: CGFloat?
+    var scaleMigrationVersion: Int?
 }
 
 final class SettingsStore {
@@ -63,6 +64,81 @@ final class CodexMonitor {
     }
 }
 
+final class ResizeHandleView: NSView {
+    var onBegin: (() -> Void)?
+    var onChange: (() -> Void)?
+    var onEnd: (() -> Void)?
+    private var trackingArea: NSTrackingArea?
+    private var hovering = false
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        NSCursor.resizeLeftRight.set()
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        NSCursor.arrow.set()
+        needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) { onBegin?() }
+    override func mouseDragged(with event: NSEvent) { onChange?() }
+    override func mouseUp(with event: NSEvent) { onEnd?() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let color = NSColor.white.withAlphaComponent(hovering ? 0.9 : 0.42)
+        color.setStroke()
+        let path = NSBezierPath()
+        path.lineWidth = hovering ? 2.0 : 1.5
+        path.lineCapStyle = .round
+        for offset: CGFloat in [7, 12, 17] {
+            path.move(to: NSPoint(x: bounds.maxX - offset, y: 4))
+            path.line(to: NSPoint(x: bounds.maxX - 4, y: offset))
+        }
+        path.stroke()
+    }
+}
+
+final class PetImageView: NSImageView {
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+}
+
+final class PetStatusLabel: NSTextField {
+    init() {
+        super.init(frame: .zero)
+        isEditable = false
+        isSelectable = false
+        isBordered = false
+        drawsBackground = false
+        stringValue = "Codex 待机"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+}
+
 final class PetPanel: NSPanel {
     private let store = SettingsStore()
     private let monitor = CodexMonitor()
@@ -73,15 +149,25 @@ final class PetPanel: NSPanel {
     private var frameIndex = 0
     private var timer: Timer?
     private var statusTimer: Timer?
-    private var imageView = NSImageView()
-    private var statusLabel = NSTextField(labelWithString: "Codex 待机")
+    private var imageView = PetImageView()
+    private var statusLabel = PetStatusLabel()
     private var dragOrigin: NSPoint?
     private var mouseOrigin: NSPoint?
     private var isDragging = false
+    private let resizeHandle = ResizeHandleView()
+    private var resizeStartScale = 0.55
+    private var resizeStartFrame = NSRect.zero
+    private var resizeStartMouse = NSPoint.zero
 
     init() {
         settings = store.load()
+        let needsScaleMigration = settings.scaleMigrationVersion == nil
+        if needsScaleMigration {
+            settings.scale = min(settings.scale, 0.55)
+            settings.scaleMigrationVersion = 1
+        }
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        if needsScaleMigration { store.save(settings) }
         isFloatingPanel = true
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -112,22 +198,25 @@ final class PetPanel: NSPanel {
         statusLabel.cell?.wraps = false
         view.addSubview(imageView)
         view.addSubview(statusLabel)
+        resizeHandle.translatesAutoresizingMaskIntoConstraints = false
+        resizeHandle.toolTip = "拖动调整桌宠大小"
+        resizeHandle.onBegin = { [weak self] in self?.beginResize() }
+        resizeHandle.onChange = { [weak self] in self?.continueResize() }
+        resizeHandle.onEnd = { [weak self] in self?.endResize() }
+        view.addSubview(resizeHandle)
         NSLayoutConstraint.activate([
             imageView.leadingAnchor.constraint(equalTo: view.leadingAnchor), imageView.trailingAnchor.constraint(equalTo: view.trailingAnchor), imageView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 4), statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4), statusLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 3), statusLabel.heightAnchor.constraint(equalToConstant: 28),
-            imageView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 2)
+            imageView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 2),
+            resizeHandle.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            resizeHandle.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            resizeHandle.widthAnchor.constraint(equalToConstant: 28),
+            resizeHandle.heightAnchor.constraint(equalToConstant: 28)
         ])
     }
 
-    private func petsDirectory() -> URL? {
-        let source = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Sources/ArkCodexDeskpet/pets")
-        if FileManager.default.fileExists(atPath: source.path) { return source }
-        return Bundle.module.url(forResource: "pets", withExtension: nil)
-    }
-
     private func loadPet(named name: String) {
-        guard let root = petsDirectory() else { fatalError("Pet assets are missing") }
-        let petURL = root.appendingPathComponent(name)
+        guard let petURL = PetLibrary.shared.petURL(named: name) else { fatalError("Pet assets are missing") }
         guard let data = try? Data(contentsOf: petURL.appendingPathComponent("manifest.json")), let loaded = try? JSONDecoder().decode(Manifest.self, from: data) else { fatalError("Invalid manifest for \(name)") }
         manifest = loaded
         framesURL = petURL.appendingPathComponent("frames")
@@ -137,15 +226,62 @@ final class PetPanel: NSPanel {
     }
 
     private func applyAppearance() {
-        guard let info = manifest.states[state] else { return }
-        let width = max(120, CGFloat(info.bbox[2] - info.bbox[0] + 1) * settings.scale)
-        let imageHeight = max(120, CGFloat(info.bbox[3] - info.bbox[1] + 1) * settings.scale)
-        let statusHeight: CGFloat = settings.miniMode ? 0 : 33
-        setContentSize(NSSize(width: width, height: imageHeight + statusHeight))
+        let size = contentSize(for: settings.scale)
+        setContentSize(size)
         statusLabel.isHidden = settings.miniMode
-        if let x = settings.positionX, let y = settings.positionY { setFrameOrigin(NSPoint(x: x, y: y))
-        } else if let screen = NSScreen.main { setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - width / 2, y: screen.visibleFrame.minY + 24)) }
+        if let x = settings.positionX, let y = settings.positionY {
+            setFrameOrigin(clampedOrigin(NSPoint(x: x, y: y), size: size))
+        } else if let screen = NSScreen.main {
+            setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - size.width / 2, y: screen.visibleFrame.minY + 24))
+        }
         showFrame()
+    }
+
+    private func clampedOrigin(_ origin: NSPoint, size: NSSize) -> NSPoint {
+        let center = NSPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+        let screen = NSScreen.screens.first { $0.frame.contains(center) } ?? NSScreen.main
+        guard let visible = screen?.visibleFrame else { return origin }
+        return NSPoint(
+            x: min(max(origin.x, visible.minX), visible.maxX - size.width),
+            y: min(max(origin.y, visible.minY), visible.maxY - size.height)
+        )
+    }
+
+    private func contentSize(for scale: Double) -> NSSize {
+        guard let info = manifest.states[state] else { return NSSize(width: 120, height: 120) }
+        let width = max(100, CGFloat(info.bbox[2] - info.bbox[0] + 1) * scale)
+        let imageHeight = max(100, CGFloat(info.bbox[3] - info.bbox[1] + 1) * scale)
+        let statusHeight: CGFloat = settings.miniMode ? 0 : 33
+        return NSSize(width: width, height: imageHeight + statusHeight)
+    }
+
+    private func beginResize() {
+        resizeStartScale = settings.scale
+        resizeStartFrame = frame
+        resizeStartMouse = NSEvent.mouseLocation
+    }
+
+    private func continueResize() {
+        let mouse = NSEvent.mouseLocation
+        let horizontal = mouse.x - resizeStartMouse.x
+        let vertical = resizeStartMouse.y - mouse.y
+        let naturalWidth = max(1, resizeStartFrame.width / resizeStartScale)
+        let naturalHeight = max(1, resizeStartFrame.height / resizeStartScale)
+        let horizontalScale = horizontal / naturalWidth
+        let verticalScale = vertical / naturalHeight
+        let delta = abs(horizontalScale) >= abs(verticalScale) ? horizontalScale : verticalScale
+        let newScale = min(1.5, max(0.2, resizeStartScale + delta))
+        let size = contentSize(for: newScale)
+        let origin = NSPoint(x: resizeStartFrame.minX, y: resizeStartFrame.maxY - size.height)
+        settings.scale = newScale
+        setFrame(NSRect(origin: origin, size: size), display: true)
+        showFrame()
+    }
+
+    private func endResize() {
+        settings.positionX = frame.origin.x
+        settings.positionY = frame.origin.y
+        store.save(settings)
     }
 
     private func startTimers() {
@@ -170,9 +306,9 @@ final class PetPanel: NSPanel {
     }
     func toggleLocked() { settings.locked.toggle(); store.save(settings) }
     func toggleMini() { settings.miniMode.toggle(); store.save(settings); applyAppearance() }
-    func scale(by delta: Double) { settings.scale = min(2.0, max(0.3, settings.scale + delta)); store.save(settings); applyAppearance() }
+    func scale(by delta: Double) { settings.scale = min(1.5, max(0.2, settings.scale + delta)); store.save(settings); applyAppearance() }
     func savePosition() { settings.positionX = frame.origin.x; settings.positionY = frame.origin.y; store.save(settings) }
-    func availablePets() -> [String] { (try? FileManager.default.contentsOfDirectory(atPath: petsDirectory()!.path))?.filter { FileManager.default.fileExists(atPath: petsDirectory()!.appendingPathComponent($0).appendingPathComponent("manifest.json").path) }.sorted() ?? [] }
+    func availablePets() -> [String] { PetLibrary.shared.names() }
     func selectPet(_ name: String) { savePosition(); loadPet(named: name); store.save(settings); applyAppearance(); startTimers() }
 
     override func mouseDown(with event: NSEvent) { mouseOrigin = event.locationInWindow; dragOrigin = frame.origin; isDragging = false }
@@ -216,6 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pets = NSMenu(title: "Pet Library")
         for name in pet.availablePets() { let item = NSMenuItem(title: name, action: #selector(selectPet(_:)), keyEquivalent: ""); item.representedObject = name; item.target = self; item.state = name == pet.settings.pet ? .on : .off; pets.addItem(item) }
         let library = NSMenuItem(title: "Pet Library", action: nil, keyEquivalent: ""); library.submenu = pets; menu.addItem(library)
+        add(menu, "添加桌宠…", #selector(addPet))
         menu.addItem(.separator())
         add(menu, "Quit Ark Codex Deskpet", #selector(quit))
         return menu
@@ -228,6 +365,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func smaller() { pet.scale(by: -0.1) }
     @objc private func selectState(_ sender: NSMenuItem) { if let state = sender.representedObject as? String { pet.setState(state) } }
     @objc private func selectPet(_ sender: NSMenuItem) { if let name = sender.representedObject as? String { pet.selectPet(name) } }
+    @objc private func addPet() {
+        let panel = NSOpenPanel()
+        panel.title = "选择桌宠包来源"
+        panel.message = "选择一个桌宠包，或包含多个桌宠包的文件夹。"
+        panel.prompt = "扫描"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+
+        let candidates = PetLibrary.shared.candidates(in: panel.urls)
+        guard !candidates.isEmpty else {
+            showMessage(title: "没有找到兼容桌宠", text: "所选文件夹中没有有效的 manifest.json 和完整动画帧。")
+            return
+        }
+        let picker = PetSearchController(candidates: candidates)
+        guard let candidate = picker.runModal() else { return }
+        do {
+            try PetLibrary.shared.install(candidate)
+        } catch PetImportError.alreadyExists {
+            let confirmation = NSAlert()
+            confirmation.messageText = "替换已有桌宠？"
+            confirmation.informativeText = "“\(candidate.name)”已经导入。替换会更新它的素材。"
+            confirmation.addButton(withTitle: "替换")
+            confirmation.addButton(withTitle: "取消")
+            guard confirmation.runModal() == .alertFirstButtonReturn else { return }
+            do {
+                try PetLibrary.shared.install(candidate, replacing: true)
+            } catch {
+                showMessage(title: "导入失败", text: error.localizedDescription)
+                return
+            }
+        } catch {
+            showMessage(title: "导入失败", text: error.localizedDescription)
+            return
+        }
+        pet.selectPet(candidate.name)
+        statusItem.menu = makeMenu()
+        showMessage(title: "桌宠已添加", text: "已导入并切换到“\(candidate.name)”。")
+    }
+
+    private func showMessage(title: String, text: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = text
+        alert.addButton(withTitle: "好")
+        alert.runModal()
+    }
     @objc private func quit() { NSApp.terminate(nil) }
 }
 
