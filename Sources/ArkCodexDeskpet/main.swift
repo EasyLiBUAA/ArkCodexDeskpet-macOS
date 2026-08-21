@@ -123,20 +123,86 @@ final class PetImageView: NSImageView {
     }
 }
 
-final class PetStatusLabel: NSTextField {
+func petStatusDisplayText(_ status: String) -> String {
+    status.contains("运行中") ? "Codex 正在处理" : status
+}
+
+final class PetStatusBubble: NSView {
+    private let label = NSTextField(labelWithString: "Codex 待机")
+    private var active = false
+
+    var stringValue: String {
+        get { label.stringValue }
+        set {
+            label.stringValue = petStatusDisplayText(newValue)
+            toolTip = newValue == label.stringValue ? nil : newValue
+            active = newValue.contains("运行中")
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+
     init() {
         super.init(frame: .zero)
-        isEditable = false
-        isSelectable = false
-        isBordered = false
-        drawsBackground = false
-        stringValue = "Codex 待机"
+        wantsLayer = true
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.16
+        layer?.shadowRadius = 7
+        layer?.shadowOffset = NSSize(width: 0, height: -2)
+
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.textColor = NSColor(calibratedWhite: 0.12, alpha: 0.92)
+        label.font = .systemFont(ofSize: 12.5, weight: .medium)
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 27),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 3)
+        ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+        NSSize(width: min(360, label.intrinsicContentSize.width + 39), height: 40)
+    }
+
+    override func layout() {
+        super.layout()
+        if #available(macOS 14.0, *) {
+            layer?.shadowPath = bubblePath().cgPath
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let path = bubblePath()
+        NSColor(calibratedWhite: 0.98, alpha: 0.94).setFill()
+        path.fill()
+        NSColor(calibratedRed: 0.13, green: 0.55, blue: 0.53, alpha: 0.58).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+
+        let dot = NSBezierPath(ovalIn: NSRect(x: 12, y: 20, width: 7, height: 7))
+        (active
+            ? NSColor(calibratedRed: 0.12, green: 0.67, blue: 0.49, alpha: 1)
+            : NSColor(calibratedRed: 0.24, green: 0.58, blue: 0.65, alpha: 1)
+        ).setFill()
+        dot.fill()
+    }
+
+    private func bubblePath() -> NSBezierPath {
+        let body = NSRect(x: 1, y: 8, width: max(0, bounds.width - 2), height: max(0, bounds.height - 9))
+        let path = NSBezierPath(roundedRect: body, xRadius: 10, yRadius: 10)
+        let center = bounds.midX
+        path.move(to: NSPoint(x: center - 6, y: 8))
+        path.line(to: NSPoint(x: center, y: 2))
+        path.line(to: NSPoint(x: center + 6, y: 8))
+        path.close()
+        return path
     }
 }
 
@@ -175,7 +241,7 @@ final class PetPanel: NSPanel {
     private var timer: Timer?
     private var statusTimer: Timer?
     private var imageView = PetImageView()
-    private var statusLabel = PetStatusLabel()
+    private var statusBubble = PetStatusBubble()
     private var dragOrigin: NSPoint?
     private var dragStartMouse: NSPoint?
     private var isDragging = false
@@ -218,16 +284,9 @@ final class PetPanel: NSPanel {
         contentView = view
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.textColor = .white
-        statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.wantsLayer = true
-        statusLabel.layer?.backgroundColor = NSColor(calibratedWhite: 0.10, alpha: 0.78).cgColor
-        statusLabel.layer?.cornerRadius = 7
-        statusLabel.cell?.wraps = false
+        statusBubble.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(imageView)
-        view.addSubview(statusLabel)
+        view.addSubview(statusBubble)
         resizeHandle.translatesAutoresizingMaskIntoConstraints = false
         resizeHandle.toolTip = "拖动调整桌宠大小"
         resizeHandle.onBegin = { [weak self] in self?.beginResize() }
@@ -244,8 +303,12 @@ final class PetPanel: NSPanel {
         }
         NSLayoutConstraint.activate([
             imageView.leadingAnchor.constraint(equalTo: view.leadingAnchor), imageView.trailingAnchor.constraint(equalTo: view.trailingAnchor), imageView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 4), statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4), statusLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 3), statusLabel.heightAnchor.constraint(equalToConstant: 28),
-            imageView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 2),
+            statusBubble.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            statusBubble.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 4),
+            statusBubble.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -4),
+            statusBubble.topAnchor.constraint(equalTo: view.topAnchor),
+            statusBubble.heightAnchor.constraint(equalToConstant: 40),
+            imageView.topAnchor.constraint(equalTo: statusBubble.bottomAnchor, constant: 1),
             resizeHandle.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             resizeHandle.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             resizeHandle.widthAnchor.constraint(equalToConstant: 28),
@@ -266,7 +329,7 @@ final class PetPanel: NSPanel {
     private func applyAppearance() {
         let size = contentSize(for: settings.scale)
         setContentSize(size)
-        statusLabel.isHidden = settings.miniMode
+        statusBubble.isHidden = settings.miniMode
         if let x = settings.positionX, let y = settings.positionY {
             setFrameOrigin(clampedOrigin(NSPoint(x: x, y: y), size: size))
         } else if let screen = NSScreen.main {
@@ -289,7 +352,7 @@ final class PetPanel: NSPanel {
         guard let info = manifest.states[state] else { return NSSize(width: 120, height: 120) }
         let width = max(100, CGFloat(info.bbox[2] - info.bbox[0] + 1) * scale)
         let imageHeight = max(100, CGFloat(info.bbox[3] - info.bbox[1] + 1) * scale)
-        let statusHeight: CGFloat = settings.miniMode ? 0 : 33
+        let statusHeight: CGFloat = settings.miniMode ? 0 : 41
         return NSSize(width: width, height: imageHeight + statusHeight)
     }
 
@@ -336,7 +399,7 @@ final class PetPanel: NSPanel {
         frameIndex = (frameIndex + 1) % info.count
         showFrame()
     }
-    private func refreshStatus() { statusLabel.stringValue = monitor.status() }
+    private func refreshStatus() { statusBubble.stringValue = monitor.status() }
 
     func setState(_ next: String) {
         guard manifest.states[next] != nil else { return }

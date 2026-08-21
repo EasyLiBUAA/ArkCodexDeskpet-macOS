@@ -16,6 +16,11 @@ final class ArkCodexDeskpetTests: XCTestCase {
         XCTAssertEqual(result, NSPoint(x: 165, y: 45))
     }
 
+    func testRunningStatusUsesCompactBubbleText() {
+        XCTAssertEqual(petStatusDisplayText("Codex 运行中 · a very long task"), "Codex 正在处理")
+        XCTAssertEqual(petStatusDisplayText("Codex 待机"), "Codex 待机")
+    }
+
     func testPRTSMetadataListsOnlyBuildModelsWithDefaultFirst() {
         let metadata = PRTSMetadata(
             prefix: "https://example.invalid/",

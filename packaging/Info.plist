@@ -5,7 +5,7 @@
   <key>CFBundleIdentifier</key><string>com.personal.arkcodexdeskpet</string>
   <key>CFBundleName</key><string>Ark Codex Deskpet</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.1.0</string>
+  <key>CFBundleShortVersionString</key><string>1.2.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

@@ -32,7 +32,7 @@ ask for confirmation the first time it is opened.
 - Choose `从 PRTS 联网添加…`, search for an operator, select a result and skin,
   and wait while the app downloads and generates local animation frames.
 - Choose `从本地文件夹导入…` to import an existing compatible pet package.
-- The status ribbon reads `~/.codex/sessions/` only; it never writes Codex data.
+- The status bubble reads `~/.codex/sessions/` only; it never writes Codex data.
 
 An importable package is a folder containing `manifest.json` and
 `frames/<state>/frame_XXXX.png`. Imported pets are validated and copied to
