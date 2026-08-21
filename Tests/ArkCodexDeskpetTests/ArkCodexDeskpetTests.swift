@@ -21,6 +21,16 @@ final class ArkCodexDeskpetTests: XCTestCase {
         XCTAssertEqual(petStatusDisplayText("Codex 待机"), "Codex 待机")
     }
 
+    func testStatusDotTopAndTextBottomHaveEqualPadding() {
+        let body = NSRect(x: 0, y: 8, width: 160, height: 31)
+        let textHeight: CGFloat = 13
+        let dotDiameter: CGFloat = 7
+        let centerY = statusContentCenterY(body: body, textHeight: textHeight, dotDiameter: dotDiameter)
+        let topPadding = body.maxY - (centerY + dotDiameter / 2)
+        let bottomPadding = (centerY - textHeight / 2) - body.minY
+        XCTAssertEqual(topPadding, bottomPadding, accuracy: 0.001)
+    }
+
     func testPRTSMetadataListsOnlyBuildModelsWithDefaultFirst() {
         let metadata = PRTSMetadata(
             prefix: "https://example.invalid/",

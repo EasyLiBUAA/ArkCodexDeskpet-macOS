@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import Foundation
 
 struct StateInfo: Decodable {
@@ -127,15 +128,20 @@ func petStatusDisplayText(_ status: String) -> String {
     status.contains("运行中") ? "Codex 正在处理" : status
 }
 
+func statusContentCenterY(body: NSRect, textHeight: CGFloat, dotDiameter: CGFloat) -> CGFloat {
+    body.midY + (textHeight - dotDiameter) / 4
+}
+
 final class PetStatusBubble: NSView {
-    private let label = NSTextField(labelWithString: "Codex 待机")
+    private let font = NSFont.systemFont(ofSize: 12.5, weight: .medium)
+    private var displayText = "Codex 待机"
     private var active = false
 
     var stringValue: String {
-        get { label.stringValue }
+        get { displayText }
         set {
-            label.stringValue = petStatusDisplayText(newValue)
-            toolTip = newValue == label.stringValue ? nil : newValue
+            displayText = petStatusDisplayText(newValue)
+            toolTip = newValue == displayText ? nil : newValue
             active = newValue.contains("运行中")
             invalidateIntrinsicContentSize()
             needsDisplay = true
@@ -149,25 +155,13 @@ final class PetStatusBubble: NSView {
         layer?.shadowOpacity = 0.16
         layer?.shadowRadius = 7
         layer?.shadowOffset = NSSize(width: 0, height: -2)
-
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.textColor = NSColor(calibratedWhite: 0.12, alpha: 0.92)
-        label.font = .systemFont(ofSize: 12.5, weight: .medium)
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 27),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 4.5)
-        ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: min(360, label.intrinsicContentSize.width + 39), height: 40)
+        let width = CTLineGetTypographicBounds(textLine(), nil, nil, nil)
+        return NSSize(width: min(360, ceil(width) + 39), height: 40)
     }
 
     override func layout() {
@@ -186,19 +180,50 @@ final class PetStatusBubble: NSView {
         path.lineWidth = 1
         path.stroke()
 
-        let dot = NSBezierPath(ovalIn: NSRect(x: 12, y: 20, width: 7, height: 7))
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let line = textLine()
+        let textBounds = CTLineGetImageBounds(line, context)
+        let dotDiameter: CGFloat = 7
+        let contentCenterY = statusContentCenterY(
+            body: bubbleBody,
+            textHeight: textBounds.height,
+            dotDiameter: dotDiameter
+        )
+        let dot = NSBezierPath(ovalIn: NSRect(
+            x: 12,
+            y: contentCenterY - dotDiameter / 2,
+            width: dotDiameter,
+            height: dotDiameter
+        ))
         (active
             ? NSColor(calibratedRed: 0.12, green: 0.67, blue: 0.49, alpha: 1)
             : NSColor(calibratedRed: 0.24, green: 0.58, blue: 0.65, alpha: 1)
         ).setFill()
         dot.fill()
+
+        context.saveGState()
+        context.textPosition = CGPoint(x: 27, y: contentCenterY - textBounds.midY)
+        CTLineDraw(line, context)
+        context.restoreGState()
+    }
+
+    private var bubbleBody: NSRect {
+        NSRect(x: 1, y: 8, width: max(0, bounds.width - 2), height: max(0, bounds.height - 9))
+    }
+
+    private func textLine() -> CTLine {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor(calibratedWhite: 0.12, alpha: 0.92)
+        ]
+        return CTLineCreateWithAttributedString(NSAttributedString(string: displayText, attributes: attributes))
     }
 
     private func bubblePath() -> NSBezierPath {
-        let minX: CGFloat = 1
-        let maxX = max(minX, bounds.maxX - 1)
-        let minY: CGFloat = 8
-        let maxY = max(minY, bounds.maxY - 1)
+        let minX = bubbleBody.minX
+        let maxX = bubbleBody.maxX
+        let minY = bubbleBody.minY
+        let maxY = bubbleBody.maxY
         let radius = min(10, (maxY - minY) / 2)
         let centerX = bounds.midX
         let path = NSBezierPath()
