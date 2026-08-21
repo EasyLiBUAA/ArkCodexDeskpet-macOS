@@ -160,7 +160,7 @@ final class PetStatusBubble: NSView {
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 27),
             label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 3)
+            label.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 4.5)
         ])
     }
 
@@ -195,12 +195,25 @@ final class PetStatusBubble: NSView {
     }
 
     private func bubblePath() -> NSBezierPath {
-        let body = NSRect(x: 1, y: 8, width: max(0, bounds.width - 2), height: max(0, bounds.height - 9))
-        let path = NSBezierPath(roundedRect: body, xRadius: 10, yRadius: 10)
-        let center = bounds.midX
-        path.move(to: NSPoint(x: center - 6, y: 8))
-        path.line(to: NSPoint(x: center, y: 2))
-        path.line(to: NSPoint(x: center + 6, y: 8))
+        let minX: CGFloat = 1
+        let maxX = max(minX, bounds.maxX - 1)
+        let minY: CGFloat = 8
+        let maxY = max(minY, bounds.maxY - 1)
+        let radius = min(10, (maxY - minY) / 2)
+        let centerX = bounds.midX
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: minX + radius, y: minY))
+        path.line(to: NSPoint(x: centerX - 6, y: minY))
+        path.line(to: NSPoint(x: centerX, y: 2))
+        path.line(to: NSPoint(x: centerX + 6, y: minY))
+        path.line(to: NSPoint(x: maxX - radius, y: minY))
+        path.appendArc(withCenter: NSPoint(x: maxX - radius, y: minY + radius), radius: radius, startAngle: -90, endAngle: 0)
+        path.line(to: NSPoint(x: maxX, y: maxY - radius))
+        path.appendArc(withCenter: NSPoint(x: maxX - radius, y: maxY - radius), radius: radius, startAngle: 0, endAngle: 90)
+        path.line(to: NSPoint(x: minX + radius, y: maxY))
+        path.appendArc(withCenter: NSPoint(x: minX + radius, y: maxY - radius), radius: radius, startAngle: 90, endAngle: 180)
+        path.line(to: NSPoint(x: minX, y: minY + radius))
+        path.appendArc(withCenter: NSPoint(x: minX + radius, y: minY + radius), radius: radius, startAngle: 180, endAngle: 270)
         path.close()
         return path
     }
