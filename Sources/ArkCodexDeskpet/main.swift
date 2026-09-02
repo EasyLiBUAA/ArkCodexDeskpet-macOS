@@ -24,6 +24,64 @@ struct PetSettings: Codable {
     var dragMigrationVersion: Int?
 }
 
+/// Manages a per-user launch agent so the selected deskpet returns after login.
+/// This is intentionally separate from Codex: macOS does not expose Codex's
+/// built-in pet as an extension point for third-party applications.
+final class LaunchAtLoginManager {
+    static let shared = LaunchAtLoginManager()
+    private let label = "com.personal.arkcodexdeskpet"
+    private var plistURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            .appendingPathComponent(label + ".plist")
+    }
+
+    var isEnabled: Bool { FileManager.default.fileExists(atPath: plistURL.path) }
+
+    @discardableResult
+    func setEnabled(_ enabled: Bool) -> Bool {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if enabled {
+                let executable = Bundle.main.executableURL?.path ?? "/Applications/ArkCodexDeskpet.app/Contents/MacOS/ArkCodexDeskpet"
+                let plist: [String: Any] = [
+                    "Label": label,
+                    "ProgramArguments": [executable],
+                    "RunAtLoad": true,
+                    "KeepAlive": false,
+                    "ProcessType": "Interactive"
+                ]
+                let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+                try data.write(to: plistURL, options: .atomic)
+                bootstrap()
+            } else {
+                bootout()
+                try? fm.removeItem(at: plistURL)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func bootstrap() {
+        let uid = String(getuid())
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["bootstrap", "gui/\(uid)", plistURL.path]
+        try? process.run(); process.waitUntilExit()
+    }
+
+    private func bootout() {
+        let uid = String(getuid())
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["bootout", "gui/\(uid)/\(label)"]
+        try? process.run(); process.waitUntilExit()
+    }
+}
+
 final class SettingsStore {
     private let url: URL
     init() {
@@ -489,6 +547,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
         pet = PetPanel()
+        // Make the deskpet persistent across restarts by default. Users can
+        // disable this later from the status-bar/context menu.
+        if !LaunchAtLoginManager.shared.isEnabled {
+            _ = LaunchAtLoginManager.shared.setEnabled(true)
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Ark Codex Deskpet")
         statusItem.menu = makeMenu()
@@ -510,6 +573,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let library = NSMenuItem(title: "桌宠库", action: nil, keyEquivalent: ""); library.submenu = pets; menu.addItem(library)
         add(menu, "从 PRTS 联网添加…", #selector(addPRTSPet))
         add(menu, "从本地文件夹导入…", #selector(addPet))
+        let loginItem = NSMenuItem(title: "登录时自动启动", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        loginItem.target = self
+        loginItem.state = LaunchAtLoginManager.shared.isEnabled ? .on : .off
+        menu.addItem(loginItem)
         menu.addItem(.separator())
         add(menu, "退出 Ark Codex Deskpet", #selector(quit))
         return menu
@@ -520,6 +587,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleMini() { pet.toggleMini(); statusItem.menu = makeMenu() }
     @objc private func larger() { pet.scale(by: 0.1) }
     @objc private func smaller() { pet.scale(by: -0.1) }
+    @objc private func toggleLaunchAtLogin() {
+        let manager = LaunchAtLoginManager.shared
+        _ = manager.setEnabled(!manager.isEnabled)
+        statusItem.menu = makeMenu()
+    }
     @objc private func selectState(_ sender: NSMenuItem) { if let state = sender.representedObject as? String { pet.setState(state) } }
     @objc private func selectPet(_ sender: NSMenuItem) { if let name = sender.representedObject as? String { pet.selectPet(name) } }
     @objc private func addPRTSPet() {
