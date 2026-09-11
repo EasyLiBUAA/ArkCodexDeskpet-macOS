@@ -100,27 +100,101 @@ final class SettingsStore {
     }
 }
 
+enum MonitorActivity {
+    case active
+    case available
+    case offline
+}
+
+struct MonitorStatus {
+    let text: String
+    let detail: String
+    let activity: MonitorActivity
+}
+
+func compactTaskSummary(_ message: String, limit: Int = 18) -> String {
+    var source = message
+    if let marker = source.range(of: "## My request:", options: .backwards) {
+        source = String(source[marker.upperBound...])
+    }
+    let compact = source.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    guard compact.count > limit else { return compact }
+    return String(compact.prefix(limit)) + "…"
+}
+
 final class CodexMonitor {
-    func status() -> String {
+    func status() -> MonitorStatus {
         let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")
-        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return "Codex 待机" }
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+            return MonitorStatus(text: "Codex 待机", detail: "没有找到 Codex 会话", activity: .offline)
+        }
         var latest: URL?
         var latestDate = Date.distantPast
         for case let url as URL in enumerator where url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" {
             let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             if date > latestDate { latest = url; latestDate = date }
         }
-        guard let file = latest else { return "Codex 待机" }
-        let active = Date().timeIntervalSince(latestDate) < 10
-        guard active, let text = try? String(contentsOf: file, encoding: .utf8) else { return "Codex 待机" }
-        let task = text.split(separator: "\n").reversed().compactMap { line -> String? in
-            guard let data = line.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let payload = value["payload"] as? [String: Any] else { return nil }
-            if payload["type"] as? String == "user_message", let message = payload["message"] as? String, !message.contains("environment_context") { return message }
-            return nil
-        }.first
-        guard let task else { return "Codex 运行中" }
-        let compact = task.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        return "Codex 运行中 · " + String(compact.prefix(36))
+        guard let file = latest else { return MonitorStatus(text: "Codex 待机", detail: "没有最近的 Codex 会话", activity: .available) }
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else {
+            return MonitorStatus(text: "Codex · 待机：等待新任务", detail: "Codex 当前没有处理任务", activity: .available)
+        }
+
+        var task = "当前任务"
+        var phase = "分析中"
+        var completed = false
+        for line in text.split(separator: "\n") {
+            guard let data = line.data(using: .utf8),
+                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let payload = value["payload"] as? [String: Any] else { continue }
+            let type = payload["type"] as? String
+            if type == "user_message", let message = payload["message"] as? String, !message.contains("environment_context") {
+                let summary = compactTaskSummary(message)
+                if !summary.isEmpty { task = summary }
+            } else if type == "task_started" {
+                phase = "分析中"
+                completed = false
+            } else if type == "task_complete" {
+                phase = "已完成"
+                completed = true
+            } else if value["type"] as? String == "response_item", !completed {
+                if type == "reasoning" {
+                    phase = "分析中"
+                } else if type == "custom_tool_call" {
+                    let name = payload["name"] as? String ?? ""
+                    phase = name == "apply_patch" ? "修改中" : "执行中"
+                } else if type == "message", payload["role"] as? String == "assistant" {
+                    phase = "整理回复"
+                }
+            }
+        }
+
+        let recentlyUpdated = Date().timeIntervalSince(latestDate) < 120
+        if completed {
+            return MonitorStatus(text: "Codex · 已完成：\(task)", detail: "Codex 已完成 · \(task)", activity: .available)
+        }
+        if recentlyUpdated {
+            return MonitorStatus(text: "Codex · \(phase)：\(task)", detail: "Codex \(phase) · \(task)", activity: .active)
+        }
+        return MonitorStatus(text: "Codex · 待机：\(task)", detail: "Codex 待机 · 最近任务：\(task)", activity: .available)
+    }
+}
+
+func workBuddyStatus(isRunning: Bool, isActive: Bool) -> MonitorStatus {
+    if isActive {
+        return MonitorStatus(text: "WorkBuddy 使用中", detail: "WorkBuddy 位于前台", activity: .active)
+    }
+    if isRunning {
+        return MonitorStatus(text: "WorkBuddy 已打开", detail: "WorkBuddy 正在后台运行", activity: .available)
+    }
+    return MonitorStatus(text: "WorkBuddy 未运行", detail: "WorkBuddy 当前没有运行", activity: .offline)
+}
+
+final class WorkBuddyMonitor {
+    func status() -> MonitorStatus {
+        let applications = NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == "com.tencent.workbuddy.mac"
+        }
+        return workBuddyStatus(isRunning: !applications.isEmpty, isActive: applications.contains(where: \.isActive))
     }
 }
 
@@ -182,28 +256,22 @@ final class PetImageView: NSImageView {
     }
 }
 
-func petStatusDisplayText(_ status: String) -> String {
-    status.contains("运行中") ? "Codex 正在处理" : status
-}
-
 func statusContentCenterY(body: NSRect, textHeight: CGFloat, dotDiameter: CGFloat) -> CGFloat {
     body.midY + (textHeight - dotDiameter) / 4
 }
 
 final class PetStatusBubble: NSView {
     private let font = NSFont.systemFont(ofSize: 12.5, weight: .medium)
-    private var displayText = "Codex 待机"
-    private var active = false
+    private var statuses = [
+        MonitorStatus(text: "Codex 待机", detail: "Codex 当前没有处理任务", activity: .available),
+        MonitorStatus(text: "WorkBuddy 未运行", detail: "WorkBuddy 当前没有运行", activity: .offline)
+    ]
 
-    var stringValue: String {
-        get { displayText }
-        set {
-            displayText = petStatusDisplayText(newValue)
-            toolTip = newValue == displayText ? nil : newValue
-            active = newValue.contains("运行中")
-            invalidateIntrinsicContentSize()
-            needsDisplay = true
-        }
+    func update(_ statuses: [MonitorStatus]) {
+        self.statuses = statuses
+        toolTip = statuses.map(\.detail).joined(separator: "\n")
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
     }
 
     init() {
@@ -218,8 +286,7 @@ final class PetStatusBubble: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var intrinsicContentSize: NSSize {
-        let width = CTLineGetTypographicBounds(textLine(), nil, nil, nil)
-        return NSSize(width: min(360, ceil(width) + 39), height: 40)
+        NSSize(width: 252, height: 58)
     }
 
     override func layout() {
@@ -239,42 +306,48 @@ final class PetStatusBubble: NSView {
         path.stroke()
 
         guard let context = NSGraphicsContext.current?.cgContext else { return }
-        let line = textLine()
-        let textBounds = CTLineGetImageBounds(line, context)
         let dotDiameter: CGFloat = 7
-        let contentCenterY = statusContentCenterY(
+        let sampleBounds = CTLineGetImageBounds(textLine("WorkBuddy 使用中"), context)
+        let groupCenterY = statusContentCenterY(
             body: bubbleBody,
-            textHeight: textBounds.height,
+            textHeight: sampleBounds.height,
             dotDiameter: dotDiameter
         )
-        let dot = NSBezierPath(ovalIn: NSRect(
-            x: 12,
-            y: contentCenterY - dotDiameter / 2,
-            width: dotDiameter,
-            height: dotDiameter
-        ))
-        (active
-            ? NSColor(calibratedRed: 0.12, green: 0.67, blue: 0.49, alpha: 1)
-            : NSColor(calibratedRed: 0.24, green: 0.58, blue: 0.65, alpha: 1)
-        ).setFill()
-        dot.fill()
+        let rowOffset: CGFloat = 9.5
+        for (index, status) in statuses.prefix(2).enumerated() {
+            let rowCenterY = groupCenterY + (index == 0 ? rowOffset : -rowOffset)
+            let dot = NSBezierPath(ovalIn: NSRect(x: 12, y: rowCenterY - dotDiameter / 2, width: dotDiameter, height: dotDiameter))
+            color(for: status.activity).setFill()
+            dot.fill()
 
-        context.saveGState()
-        context.textPosition = CGPoint(x: 27, y: contentCenterY - textBounds.midY)
-        CTLineDraw(line, context)
-        context.restoreGState()
+            let fullLine = textLine(status.text)
+            let line = CTLineCreateTruncatedLine(fullLine, Double(max(0, bounds.width - 39)), .end, textLine("…")) ?? fullLine
+            let textBounds = CTLineGetImageBounds(line, context)
+            context.saveGState()
+            context.textPosition = CGPoint(x: 27, y: rowCenterY - textBounds.midY)
+            CTLineDraw(line, context)
+            context.restoreGState()
+        }
     }
 
     private var bubbleBody: NSRect {
         NSRect(x: 1, y: 8, width: max(0, bounds.width - 2), height: max(0, bounds.height - 9))
     }
 
-    private func textLine() -> CTLine {
+    private func textLine(_ text: String) -> CTLine {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor(calibratedWhite: 0.12, alpha: 0.92)
         ]
-        return CTLineCreateWithAttributedString(NSAttributedString(string: displayText, attributes: attributes))
+        return CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+    }
+
+    private func color(for activity: MonitorActivity) -> NSColor {
+        switch activity {
+        case .active: return NSColor(calibratedRed: 0.10, green: 0.68, blue: 0.48, alpha: 1)
+        case .available: return NSColor(calibratedRed: 0.24, green: 0.58, blue: 0.65, alpha: 1)
+        case .offline: return NSColor(calibratedWhite: 0.55, alpha: 0.8)
+        }
     }
 
     private func bubblePath() -> NSBezierPath {
@@ -329,6 +402,7 @@ func draggedWindowOrigin(from origin: NSPoint, mouseStart: NSPoint, mouseNow: NS
 final class PetPanel: NSPanel {
     private let store = SettingsStore()
     private let monitor = CodexMonitor()
+    private let workBuddyMonitor = WorkBuddyMonitor()
     var settings: PetSettings
     var manifest: Manifest!
     private var framesURL: URL!
@@ -403,7 +477,7 @@ final class PetPanel: NSPanel {
             statusBubble.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 4),
             statusBubble.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -4),
             statusBubble.topAnchor.constraint(equalTo: view.topAnchor),
-            statusBubble.heightAnchor.constraint(equalToConstant: 40),
+            statusBubble.heightAnchor.constraint(equalToConstant: 58),
             imageView.topAnchor.constraint(equalTo: statusBubble.bottomAnchor, constant: 1),
             resizeHandle.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             resizeHandle.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -446,9 +520,10 @@ final class PetPanel: NSPanel {
 
     private func contentSize(for scale: Double) -> NSSize {
         guard let info = manifest.states[state] else { return NSSize(width: 120, height: 120) }
-        let width = max(100, CGFloat(info.bbox[2] - info.bbox[0] + 1) * scale)
+        let imageWidth = max(100, CGFloat(info.bbox[2] - info.bbox[0] + 1) * scale)
+        let width = settings.miniMode ? imageWidth : max(imageWidth, statusBubble.intrinsicContentSize.width + 8)
         let imageHeight = max(100, CGFloat(info.bbox[3] - info.bbox[1] + 1) * scale)
-        let statusHeight: CGFloat = settings.miniMode ? 0 : 41
+        let statusHeight: CGFloat = settings.miniMode ? 0 : 59
         return NSSize(width: width, height: imageHeight + statusHeight)
     }
 
@@ -495,7 +570,7 @@ final class PetPanel: NSPanel {
         frameIndex = (frameIndex + 1) % info.count
         showFrame()
     }
-    private func refreshStatus() { statusBubble.stringValue = monitor.status() }
+    private func refreshStatus() { statusBubble.update([monitor.status(), workBuddyMonitor.status()]) }
 
     func setState(_ next: String) {
         guard manifest.states[next] != nil else { return }

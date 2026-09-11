@@ -13,6 +13,7 @@ swift build -c release
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$release_bin" "$app_dir/Contents/MacOS/ArkCodexDeskpet"
 cp -R "$root_dir/Sources/ArkCodexDeskpet/pets" "$app_dir/Contents/Resources/pets"
+cp "$root_dir/packaging/AppIcon-1024.png" "$app_dir/Contents/Resources/AppIcon-1024.png"
 cp "$root_dir/packaging/Info.plist" "$app_dir/Contents/Info.plist"
 xattr -cr "$app_dir"
 xattr -d com.apple.FinderInfo "$app_dir" 2>/dev/null || true

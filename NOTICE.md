@@ -13,3 +13,8 @@ They are included only for personal, non-commercial learning and testing.
 
 This repository does not grant any rights to Arknights artwork, characters, or
 third-party media. Do not redistribute those assets commercially.
+
+The application icon uses a chibi operator frame imported locally through the
+project's PRTS workflow. The artwork remains subject to the relevant PRTS Wiki
+and Arknights/Hypergryph terms and is included only for personal,
+non-commercial use. PRTS Wiki: https://prts.wiki/
