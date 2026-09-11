@@ -322,9 +322,13 @@ final class PetStatusBubble: NSView {
 
             let fullLine = textLine(status.text)
             let line = CTLineCreateTruncatedLine(fullLine, Double(max(0, bounds.width - 39)), .end, textLine("…")) ?? fullLine
-            let textBounds = CTLineGetImageBounds(line, context)
+            // CTLineGetImageBounds() can return different baseline offsets for
+            // truncated/non-truncated lines (notably for the longer WorkBuddy
+            // label).  Position every row from the font metrics instead so
+            // both labels remain vertically centered inside the bubble.
             context.saveGState()
-            context.textPosition = CGPoint(x: 27, y: rowCenterY - textBounds.midY)
+            let baselineOffset = (font.ascender + font.descender) / 2
+            context.textPosition = CGPoint(x: 27, y: rowCenterY - baselineOffset)
             CTLineDraw(line, context)
             context.restoreGState()
         }
